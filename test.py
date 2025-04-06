@@ -7,7 +7,7 @@ import time
 import matplotlib.pyplot as plt
 from gymnasium.wrappers import RecordVideo
 
-from environment import PacmanEnv
+from env import PacmanEnv
 from agent import DoubleDQNAgent
 from utils import set_seed, create_dirs, get_timestamp, display_frames_as_gif, visualize_q_values
 from config import TestConfig, Config
