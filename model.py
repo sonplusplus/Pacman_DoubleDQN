@@ -1,57 +1,76 @@
+# model.py
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+import numpy as np
 
-class DQN(nn.Module):
-    def __init__(self, in_channels=4, n_actions=9):
+class DQNModel(nn.Module):
+    """
+    Mạng neural sử dụng trong Deep Q-Learning
+    """
+    def __init__(self, input_shape, n_actions):
         """
-        Initialize Deep Q Network
+        Khởi tạo mạng DQN
         
         Args:
-            in_channels (int): Number of input channels
-            n_actions (int): Number of actions
+            input_shape: tuple (channels, height, width)
+            n_actions: số lượng actions
         """
-        super(DQN, self).__init__()
-        self.conv1 = nn.Conv2d(in_channels, 32, kernel_size=8, stride=4)
-        self.bn1 = nn.BatchNorm2d(32)
+        super(DQNModel, self).__init__()
         
-        self.conv2 = nn.Conv2d(32, 64, kernel_size=4, stride=2)
-        self.bn2 = nn.BatchNorm2d(64)
+        # Lớp Convolutional
+        self.conv = nn.Sequential(
+            nn.Conv2d(input_shape[0], 32, kernel_size=8, stride=4),
+            nn.ReLU(),
+            nn.Conv2d(32, 64, kernel_size=4, stride=2),
+            nn.ReLU(),
+            nn.Conv2d(64, 64, kernel_size=3, stride=1),
+            nn.ReLU()
+        )
         
-        self.conv3 = nn.Conv2d(64, 64, kernel_size=3, stride=1)
-        self.bn3 = nn.BatchNorm2d(64)
+        # Tính kích thước output của các lớp conv
+        conv_out_size = self._get_conv_output(input_shape)
         
-        # Use adaptive pooling to handle dynamic input sizes
-        self.adaptive_pool = nn.AdaptiveAvgPool2d((7, 7))
+        # Lớp fully connected
+        self.fc = nn.Sequential(
+            nn.Linear(conv_out_size, 512),
+            nn.ReLU(),
+            nn.Linear(512, n_actions)
+        )
+    
+    def _get_conv_output(self, shape):
+        """
+        Tính kích thước output của các lớp convolution
         
-        self.fc1 = nn.Linear(64 * 7 * 7, 512)
-        self.dropout = nn.Dropout(0.2)
-        self.fc2 = nn.Linear(512, n_actions)
-        
-        # Initialize weights
-        self._initialize_weights()
-        
-    def _initialize_weights(self):
-        for module in self.modules():
-            if isinstance(module, nn.Conv2d):
-                nn.init.kaiming_normal_(module.weight, mode='fan_out', nonlinearity='relu')
-                if module.bias is not None:
-                    nn.init.constant_(module.bias, 0.0)
-            elif isinstance(module, nn.BatchNorm2d):
-                nn.init.constant_(module.weight, 1)
-                nn.init.constant_(module.bias, 0)
-            elif isinstance(module, nn.Linear):
-                nn.init.kaiming_normal_(module.weight, mode='fan_out', nonlinearity='relu')
-                nn.init.constant_(module.bias, 0.0)
+        Args:
+            shape: kích thước đầu vào (channels, height, width)
+            
+        Returns:
+            int: kích thước output flatten
+        """
+        batch = torch.zeros(1, *shape)
+        conv_out = self.conv(batch)
+        return int(np.prod(conv_out.size()))
     
     def forward(self, x):
-        x = F.relu(self.bn1(self.conv1(x)))
-        x = F.relu(self.bn2(self.conv2(x)))
-        x = F.relu(self.bn3(self.conv3(x)))
+        """
+        Forward pass của mạng neural
         
-        # Use adaptive pooling
-        x = self.adaptive_pool(x)
+        Args:
+            x: tensor đầu vào, shape (batch, channels, height, width)
+               với giá trị pixel trong khoảng [0, 255]
+               
+        Returns:
+            tensor Q-values cho mỗi action
+        """
+        # Normalize input từ [0, 255] sang [0, 1]
+        x = x.float() / 255.0
         
-        x = x.view(x.size(0), -1)
-        x = self.dropout(F.relu(self.fc1(x)))
-        return self.fc2(x)
+        # Đưa qua các lớp convolution
+        conv_out = self.conv(x)
+        
+        # Flatten
+        conv_out = conv_out.view(x.size()[0], -1)
+        
+        # Đưa qua các lớp fully connected
+        return self.fc(conv_out)

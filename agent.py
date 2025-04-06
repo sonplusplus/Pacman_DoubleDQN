@@ -1,186 +1,178 @@
-import numpy as np
-import random
-from collections import deque
+# agent.py
 import torch
 import torch.nn.functional as F
-import torch.optim as optim
-from model import DQN
+import numpy as np
+import random
+
+from model import DQNModel
+from replay_buffer import ReplayBuffer
 
 class DoubleDQNAgent:
-    def __init__(self, env, config):
+    """
+    Agent sử dụng Double Deep Q-Network
+    """
+    def __init__(
+        self,
+        state_shape,
+        n_actions,
+        device,
+        learning_rate=1e-4,
+        gamma=0.99,
+        epsilon_start=1.0,
+        epsilon_final=0.01,
+        epsilon_decay=10**5,
+        buffer_size=10**5,
+        batch_size=32,
+        target_update=1000
+    ):
         """
-        Initialize Double DQN Agent
+        Khởi tạo Double DQN Agent
         
         Args:
-            env: Gym environment
-            config: Configuration dictionary with hyperparameters
+            state_shape: tuple kích thước state (channels, height, width)
+            n_actions: số lượng actions
+            device: thiết bị xử lý (cpu/cuda)
+            learning_rate: tốc độ học
+            gamma: hệ số discount
+            epsilon_start: epsilon ban đầu cho exploration
+            epsilon_final: epsilon cuối cùng
+            epsilon_decay: tốc độ giảm của epsilon
+            buffer_size: kích thước replay buffer
+            batch_size: kích thước batch
+            target_update: số bước để cập nhật target network
         """
-        self.env = env
-        self.state_dim = env.observation_space.shape
-        self.action_dim = env.action_space.n
+        self.state_shape = state_shape
+        self.n_actions = n_actions
+        self.device = device
         
         # Hyperparameters
-        self.gamma = config['gamma']  # Discount factor
-        self.learning_rate = config['learning_rate']
-        self.batch_size = config['batch_size']
-        self.buffer_size = config['buffer_size']
-        self.epsilon = config['epsilon_start']
-        self.epsilon_min = config['epsilon_min']
-        self.epsilon_decay = config['epsilon_decay']
-        self.target_update = config['target_update']
-        self.device = config['device']
-        self.current_step = 0
+        self.gamma = gamma
+        self.epsilon = epsilon_start
+        self.epsilon_start = epsilon_start
+        self.epsilon_final = epsilon_final
+        self.epsilon_decay = epsilon_decay
+        self.batch_size = batch_size
+        self.target_update = target_update
         
-        # Initialize replay buffer
-        self.memory = deque(maxlen=self.buffer_size)
-        
-        # Neural network for Q-value approximation
-        in_channels = self.state_dim[0]
-        self.policy_net = DQN(in_channels=in_channels, n_actions=self.action_dim).to(self.device)
-        self.target_net = DQN(in_channels=in_channels, n_actions=self.action_dim).to(self.device)
-        
-        # Copy policy network parameters to target network
+        # Networks
+        self.policy_net = DQNModel(state_shape, n_actions).to(device)
+        self.target_net = DQNModel(state_shape, n_actions).to(device)
         self.target_net.load_state_dict(self.policy_net.state_dict())
-        self.target_net.eval()  # Set target network to evaluation mode
+        self.target_net.eval()  # Target network luôn ở chế độ evaluation
         
         # Optimizer
-        self.optimizer = optim.Adam(self.policy_net.parameters(), lr=self.learning_rate)
+        self.optimizer = torch.optim.Adam(self.policy_net.parameters(), lr=learning_rate)
         
-    def preprocess_state(self, state):
-        """
-        Preprocess the state before passing it to the network
+        # Replay buffer
+        self.buffer = ReplayBuffer(buffer_size)
         
-        Args:
-            state: Raw state from environment
-            
-        Returns:
-            Processed state tensor
-        """
-        # Convert to float and normalize
-        state = state.astype(np.float32) / 255.0  
-        
-        # Convert to tensor and add batch dimension
-        state = torch.FloatTensor(state).unsqueeze(0).to(self.device)
-        return state
-        
-    def select_action(self, state, evaluation=False):
-        """
-        Select an action using epsilon-greedy policy
-        
-        Args:
-            state: Current state
-            evaluation: If True, use greedy policy
-            
-        Returns:
-            Selected action
-        """
-        if (random.random() > self.epsilon) or evaluation:
-            with torch.no_grad():
-                q_values = self.policy_net(state)
-                action = q_values.max(1)[1].item()
-        else:
-            action = random.randrange(self.action_dim)
-            
-        # Decay epsilon
-        if not evaluation and self.epsilon > self.epsilon_min:
-            self.epsilon *= self.epsilon_decay
-            
-        return action
+        # Counter
+        self.steps_done = 0
     
-    def store_transition(self, state, action, reward, next_state, done):
+    def select_action(self, state, training=True):
         """
-        Store transition in replay buffer
+        Chọn action dựa trên chính sách epsilon-greedy
         
         Args:
-            state: Current state
-            action: Action taken
-            reward: Reward received
-            next_state: Next state
-            done: Whether episode is done
+            state: state hiện tại (numpy array)
+            training: có đang trong quá trình huấn luyện hay không
+            
+        Returns:
+            int: action được chọn
         """
-        self.memory.append((state, action, reward, next_state, done))
+        if training:
+            # Cập nhật epsilon
+            self.epsilon = self.epsilon_final + (self.epsilon_start - self.epsilon_final) * \
+                          np.exp(-self.steps_done / self.epsilon_decay)
+            self.steps_done += 1
+            
+            # Exploration
+            if random.random() < self.epsilon:
+                return random.randrange(self.n_actions)
+        
+        # Exploitation
+        with torch.no_grad():
+            state_tensor = torch.FloatTensor(state).unsqueeze(0).to(self.device)
+            q_values = self.policy_net(state_tensor)
+            return q_values.max(1)[1].item()
     
-    def update(self):
+    def optimize(self):
         """
-        Update policy network parameters
+        Huấn luyện mạng neural với một batch từ replay buffer
         
         Returns:
-            Loss value
+            float: loss hoặc None nếu buffer chưa đủ dữ liệu
         """
-        if len(self.memory) < self.batch_size:
+        # Kiểm tra xem buffer có đủ dữ liệu không
+        if len(self.buffer) < self.batch_size:
             return None
         
-        # Sample batch from replay buffer
-        batch = random.sample(self.memory, self.batch_size)
-        states, actions, rewards, next_states, dones = zip(*batch)
+        # Lấy batch từ replay buffer
+        states, actions, rewards, next_states, dones = self.buffer.sample(self.batch_size)
         
-        # Convert to tensors
-        state_batch = torch.cat(states)
-        action_batch = torch.tensor(actions, dtype=torch.long).to(self.device)
-        reward_batch = torch.tensor(rewards, dtype=torch.float32).to(self.device)
-        next_state_batch = torch.cat(next_states)
-        done_batch = torch.tensor(dones, dtype=torch.float32).to(self.device)
+        # Chuyển sang tensor
+        states = torch.FloatTensor(states).to(self.device)
+        actions = torch.LongTensor(actions).to(self.device)
+        rewards = torch.FloatTensor(rewards).to(self.device)
+        next_states = torch.FloatTensor(next_states).to(self.device)
+        dones = torch.FloatTensor(dones).to(self.device)
         
-        # Compute Q(s_t, a) - the model computes Q(s_t), then we select the
-        # columns of actions taken
-        q_values = self.policy_net(state_batch).gather(1, action_batch.unsqueeze(1))
+        # Tính current Q values
+        q_values = self.policy_net(states).gather(1, actions.unsqueeze(1)).squeeze(1)
         
-        # Double DQN: Use policy network to select action and target network to evaluate action
-        with torch.no_grad():
-            # Get actions from policy network
-            next_actions = self.policy_net(next_state_batch).max(1)[1].unsqueeze(1)
-            
-            # Get Q-values from target network for next actions
-            next_q_values = self.target_net(next_state_batch).gather(1, next_actions)
-            
-            # Compute the expected Q values
-            expected_q_values = reward_batch.unsqueeze(1) + (1 - done_batch.unsqueeze(1)) * self.gamma * next_q_values
+        # Double DQN: chọn actions bằng policy network
+        next_actions = self.policy_net(next_states).max(1)[1].unsqueeze(1)
         
-        # Compute Huber loss (smooth L1)
+        # Tính giá trị Q cho next actions bằng target network
+        next_q_values = self.target_net(next_states).gather(1, next_actions).squeeze(1)
+        
+        # Mask cho các states terminal
+        next_q_values = next_q_values * (1 - dones)
+        
+        # Tính expected Q values
+        expected_q_values = rewards + self.gamma * next_q_values
+        
+        # Tính loss
         loss = F.smooth_l1_loss(q_values, expected_q_values)
         
-        # Optimize the model
+        # Optimization step
         self.optimizer.zero_grad()
         loss.backward()
-        
-        # Clip gradients to prevent exploding gradients
-        for param in self.policy_net.parameters():
-            param.grad.data.clamp_(-10, 10)
-            
+        # Gradient clipping để tránh exploding gradients
+        torch.nn.utils.clip_grad_norm_(self.policy_net.parameters(), max_norm=10)
         self.optimizer.step()
         
-        # Update target network
-        self.current_step += 1
-        if self.current_step % self.target_update == 0:
-            self.target_net.load_state_dict(self.policy_net.state_dict())
-            
         return loss.item()
     
-    def save_model(self, path):
+    def update_target_network(self):
+        """Cập nhật target network với trọng số từ policy network"""
+        self.target_net.load_state_dict(self.policy_net.state_dict())
+    
+    def save(self, path):
         """
-        Save model parameters
+        Lưu model
         
         Args:
-            path: Path to save the model
+            path: đường dẫn để lưu model
         """
         torch.save({
-            'policy_net': self.policy_net.state_dict(),
-            'target_net': self.target_net.state_dict(),
-            'optimizer': self.optimizer.state_dict(),
+            'policy_state_dict': self.policy_net.state_dict(),
+            'target_state_dict': self.target_net.state_dict(),
+            'optimizer_state_dict': self.optimizer.state_dict(),
             'epsilon': self.epsilon,
-            'current_step': self.current_step
+            'steps_done': self.steps_done
         }, path)
-        
-    def load_model(self, path):
+    
+    def load(self, path):
         """
-        Load model parameters
+        Tải model
         
         Args:
-            path: Path to load the model from
+            path: đường dẫn đến file model
         """
         checkpoint = torch.load(path, map_location=self.device)
-        self.policy_net.load_state_dict(checkpoint['policy_net'])
-        self.target_net.load_state_dict(checkpoint['target_net'])
-        self.optimizer.load_state_dict(checkpoint['optimizer'])
+        self.policy_net.load_state_dict(checkpoint['policy_state_dict'])
+        self.target_net.load_state_dict(checkpoint['target_state_dict'])
+        self.optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
         self.epsilon = checkpoint['epsilon']
-        self.current_step = checkpoint['current_step']
+        self.steps_done = checkpoint['steps_done']

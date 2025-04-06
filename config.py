@@ -1,41 +1,40 @@
-import torch
+# config.py
+"""
+Cấu hình cho dự án Pacman Double DQN
+"""
 
-config = {
-    # Environment
-    'env_name': 'ALE/Pacman-v5',
-    'frame_skip': 4,
-    'render_mode': None,  # Set to 'human' for visualization
+class Config:
+    # Cấu hình môi trường
+    ENV_NAME = "ALE/MsPacman-v5"  # Thay thế MsPacmanNoFrameskip-v4
+    STACK_FRAMES = 4                     # Số frame để stack
+    FRAME_SIZE = (84, 84)                # Kích thước frame sau khi resize
     
-    # Training parameters
-    'num_episodes': 2000,
-    'max_steps_per_episode': 100000,
-    'num_eval_episodes': 5,
-    'eval_interval': 50,  # Evaluate every 50 episodes
+    # Cấu hình agent
+    LEARNING_RATE = 1e-4                 # Tốc độ học
+    GAMMA = 0.99                         # Hệ số discount
+    EPSILON_START = 1.0                  # Epsilon ban đầu
+    EPSILON_FINAL = 0.01                 # Epsilon cuối cùng
+    EPSILON_DECAY = 100000               # Tốc độ giảm epsilon
     
-    # Agent hyperparameters
-    'gamma': 0.99,  # Discount factor
-    'learning_rate': 0.0001,
-    'batch_size': 32,
-    'buffer_size': 50000,
-    'target_update': 1000,  # Update target network every 1000 steps
+    # Cấu hình replay buffer
+    BUFFER_SIZE = 100000                 # Kích thước replay buffer
+    BATCH_SIZE = 32                      # Kích thước batch
     
-    # Exploration parameters
-    'epsilon_start': 1.0,
-    'epsilon_min': 0.01,
-    'epsilon_decay': 0.995,
+    # Cấu hình huấn luyện
+    TARGET_UPDATE = 1000                 # Số bước giữa mỗi lần cập nhật target network
+    TRAIN_STEPS = 1000000                # Tổng số bước huấn luyện
+    EVAL_INTERVAL = 10000                # Khoảng cách giữa các lần đánh giá
+    EVAL_EPISODES = 5                    # Số episode để đánh giá
     
-    # Preprocessing
-    'frame_stack': 4,  # Stack 4 frames as input
-    'image_size': (84, 84),  # Resize frames to 84x84
-    
-    # Hardware
-    'device': torch.device('cuda' if torch.cuda.is_available() else 'cpu'),
-    
-    # Saving & Loading
-    'save_dir': './checkpoints',
-    'log_dir': './logs',
-    'save_interval': 100,  # Save model every 100 episodes
-    
-    # Metrics to track
-    'metrics': ['episode_reward', 'episode_length', 'epsilon', 'loss', 'eval_reward']
-}
+    # Cấu hình lưu trữ
+    SAVE_DIR = "checkpoints"             # Thư mục lưu model
+    LOG_DIR = "logs"                     # Thư mục log
+    SEED = 42                            # Seed cho random
+
+class TestConfig:
+    # Cấu hình kiểm thử
+    MODEL_PATH = None                    # Đường dẫn đến model đã huấn luyện
+    TEST_EPISODES = 10                   # Số episode để kiểm thử
+    RENDER = False                       # Có render môi trường không
+    RECORD = False                       # Có ghi lại video không
+    VIDEO_DIR = "videos"                 # Thư mục lưu video
